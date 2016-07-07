@@ -7,12 +7,13 @@ sub new {
 }
 
 sub DESTROY {
-	$_[0][1](@{$_[0]}[2 .. $#_]) if --${$_[0][0]} == 0;
+	$_[0][1](@{$_[0]}[2 .. @{$_[0]} - 1]) if --${$_[0][0]} == 0;
 }
 
 package DBIx::Connector::Pool::Item;
 use warnings;
 use strict;
+use DBIx::Connector;
 
 our @ISA              = ('DBIx::Connector');
 our $not_in_use_event = sub {
@@ -36,15 +37,16 @@ sub used_now {
 }
 
 sub txn {
+	my $self = $_[0];
 	my $use_guard
-		= DBIx::Connector::Pool::Item::_on_destroy::new(\$_[0]->{_item_in_use}, $not_in_use_event, $_[0]);
+		= DBIx::Connector::Pool::Item::_on_destroy->new(\$_[0]->{_item_in_use}, $not_in_use_event, $_[0]);
 	$_[0]->used_now;
 	shift->SUPER::txn(@_);
 }
 
 sub run {
 	my $use_guard
-		= DBIx::Connector::Pool::Item::_on_destroy::new(\$_[0]->{_item_in_use}, $not_in_use_event, $_[0]);
+		= DBIx::Connector::Pool::Item::_on_destroy->new(\$_[0]->{_item_in_use}, $not_in_use_event, $_[0]);
 	$_[0]->used_now;
 	shift->SUPER::run(@_);
 }
@@ -74,7 +76,7 @@ sub new {
 	$args{password}   //= '';
 	$args{attrs}      //= {};
 	$args{dsn}        //= 'dbi:Pg:dbname=' . $args{user};
-	if ($args{max_size} > 0 && $args{initial} != 0 && $args{max_size} > $args{initial}) {
+	if ($args{max_size} > 0 && $args{initial} != 0 && $args{initial} > $args{max_size}) {
 		$args{initial} = $args{max_size};
 	}
 	$args{pool} = [];
@@ -99,20 +101,21 @@ sub make_initial {
 	}
 }
 
-sub in_use_size {
+sub connected_size {
 	my $self   = $_[0];
-	my $in_use = 0;
+	my $connected_size = 0;
 	for my $i (0 .. @{$self->{pool}} - 1) {
 		if (defined($self->{pool}[$i]{tid}) && $self->{pool}[$i]{connector}) {
-			++$in_use;
+			++$connected_size;
 		}
 	}
+	$connected_size;
 }
 
 sub collect_unused {
-	my $self   = $_[0];
-	my $in_use = $self->in_use_size;
-	return if $in_use <= $self->{initial};
+	my $self           = $_[0];
+	my $connected_size = $self->connected_size;
+	return if $connected_size <= $self->{initial};
 	my $i;
 	my $remove_sub = sub {
 		if ($i == @{$self->{pool}} - 1) {
@@ -120,11 +123,12 @@ sub collect_unused {
 		} else {
 			$self->{pool}[$i] = {};
 		}
-		--$in_use;
+		--$connected_size;
 	};
-	for ($i = @{$self->{pool}} - 1; $i >= 0 && $in_use <= $self->{initial}; --$i) {
+	my $now = time;
+	for ($i = @{$self->{pool}} - 1; $i >= 0 && $connected_size > $self->{initial}; --$i) {
 		if ($self->{pool}[$i]{connector} && !$self->{pool}[$i]{connector}->item_in_use) {
-			if (time - $self->{pool}[$i]{connector}->item_last_use > $self->{keep_alive}) {
+			if ($now - $self->{pool}[$i]{connector}->item_last_use > $self->{keep_alive}) {
 				$remove_sub->();
 			} else {
 				$self->{pool}[$i]{tid} = undef;
@@ -173,3 +177,86 @@ RESELECT:
 }
 
 1;
+
+__END__
+=head1 NAME
+ 
+DBIx::Connector::Pool - A pool of DBIx::Connector or its subclasses for asynchronous environment
+ 
+=head1 SYNOPSIS
+
+  use Coro;
+  use AnyEvent;
+  use Coro::AnyEvent;
+  use DBIx::Connector::Pool;
+  
+  my $pool = DBIx::Connector::Pool->new(
+    initial    => 1,
+    keep_alive => 1,
+    max_size   => 5,
+    tid_func   => sub {"$Coro::current" =~ /(0x[0-9a-f]+)/i; hex $1},
+    wait_func => sub        {Coro::AnyEvent::sleep 0.05},
+    attrs     => {RootClass => 'DBIx::PgCoroAnyEvent'}
+  );
+  
+  async {
+    my $connector = $pool->get_connector;
+    $connector->run(
+      sub {
+        my $sth = $_->prepare(q{select isbn, title, rating from books});
+        $sth->execute;
+        my ($isbn, $title, $rating) = $sth->fetchrow_array;
+        # ... 
+      }
+    );
+  };
+
+=head1 Description
+ 
+L<DBI> is great and L<DBIx::Connector> is a nice interface with good features 
+to it. But when it comes to work in some asynchronous environment like
+L<AnyEvent> you have to use something another with callbacks if you don't want
+to block your event loop completely waiting for data from DB. This module 
+(together with L<DBIx::PgCoroAnyEvent> for PostgreSQL or some another alike) 
+was developed to overcome this inconvenience. You can write your "normal" DBI
+code without blocking your event loop. 
+
+This module requires some threading model and I know about only one really 
+working L<Coro>. 
+
+=head1 Methods
+
+=over 
+
+=item B<new>
+  
+  my $pool = DBIx::Connector::Pool->new(
+    initial    => 1,
+    keep_alive => 1,
+    max_size   => 5,
+    tid_func   => sub {"$Coro::current" =~ /(0x[0-9a-f]+)/i; hex $1},
+    wait_func => sub        {Coro::AnyEvent::sleep 0.05},
+    attrs     => {RootClass => 'DBIx::PgCoroAnyEvent'}
+  );
+
+Creates new pool. Possible parameters:
+
+=over
+
+=item B<initial>
+
+Initial number of connected connectors. This means also minimum of of
+connected connectors.
+
+=item B<keep_alive>
+
+How long connector can live after it becomes unused. 
+-1 means no limit. 0 means collect it immediate. Positive number means seconds.
+
+=back 
+
+=item
+
+=back
+ 
+=cut
