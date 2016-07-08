@@ -63,7 +63,7 @@ package DBIx::Connector::Pool;
 use warnings;
 use strict;
 use Carp;
-use DBI;
+use Time::HiRes 'time';
 
 sub new {
 	my ($class, %args) = @_;
@@ -102,7 +102,7 @@ sub make_initial {
 }
 
 sub connected_size {
-	my $self   = $_[0];
+	my $self           = $_[0];
 	my $connected_size = 0;
 	for my $i (0 .. @{$self->{pool}} - 1) {
 		if (defined($self->{pool}[$i]{tid}) && $self->{pool}[$i]{connector}) {
@@ -159,14 +159,16 @@ RESELECT:
 				return $self->{pool}[$i]{connector};
 			}
 		}
-		$self->{wait_func}() if @{$self->{pool}} >= $self->{max_size};
-	} while (@{$self->{pool}} >= $self->{max_size});
+		$self->{wait_func}() if $self->{max_size} > 0 && @{$self->{pool}} >= $self->{max_size};
+	} while ($self->{max_size} > 0 && @{$self->{pool}} >= $self->{max_size});
 	my $connector = eval {DBIx::Connector::Pool::Item->new($self->{dsn}, $self->{user}, $self->{password}, $self->{attrs})};
 	if (!$connector) {
 		if ($self->{initial} > 0 && $self->{max_size} > $self->{initial}) {
 			--$self->{max_size};
 			carp "Corrected connector pool size: $self->{max_size}";
 			goto RESELECT;
+		} elsif ($self->{max_size} < 0) {
+			$self->{max_size} = @{$self->{pool}};
 		} else {
 			croak "Can't create new connector: " . DBI::errstr;
 		}
@@ -246,16 +248,55 @@ Creates new pool. Possible parameters:
 =item B<initial>
 
 Initial number of connected connectors. This means also minimum of of
-connected connectors.
+connected connectors. It throws error if this minimum can not be met.
 
 =item B<keep_alive>
 
-How long connector can live after it becomes unused. 
--1 means no limit. 0 means collect it immediate. Positive number means seconds.
+How long connector can live after it becomes unused. Initial connectors will
+live forever. C<-1> means no limit. C<0> means collect it immediate. Positive 
+number means seconds.
+
+=item B<max_size>
+
+Maximum pool capacity. C<-1> means unlimited.
+
+=item B<user>
+
+=item B<password>
+
+=item B<dsn>
+
+=item B<attrs>
+
+Data for C<< DBIx::Connector->new >> function. This is the same as for 
+C<< DBI->connect >>. Usually you want to add some unblocking DBI subclass
+as C<RootClass> attribute. Like C<< RootClass => 'DBIx::PgCoroAnyEvent' >>
+for PostgreSQL.  
+
+=item B<tid_func>
+
+Thread identification function. Must return number. Good choice for L<Coro> is
+
+  sub {"$Coro::current" =~ /(0x[0-9a-f]+)/i; hex $1}
+
+=item B<wait_func>
+
+This function put B<get_connector> into sleep to wait for a free connector 
+in pool.
+
+=item B<connector_base>
+
+In case you use some subclass of L<DBIx::Connector> you have to point it out.
 
 =back 
 
-=item
+=item B<get_connector>
+
+Returns available connector. The same thread will get the same already used 
+connector until it's free. Function always wait for an available connector, 
+it can't return undef. When new connection can not be established an error is 
+thrown or if B<max_size> is greater than B<intial> or equal to C<-1> then
+B<max_size> will be automatically lowered to actually possible size.
 
 =back
  
