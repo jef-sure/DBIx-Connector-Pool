@@ -9,12 +9,12 @@ use Coro::AnyEvent;
 use Time::HiRes 'time';
 use DBIx::Connector::Pool;
 use DBIx::Connector;
-use Data::Dumper;
+use PgSet;
 
-my %args;
-$args{user} //= ((getpwuid $>)[0]);
+ok(PgSet::initdb,  'local postgres db initialized');
+ok(PgSet::startdb, 'local postgres db started');
 
-my $tc = DBIx::Connector->new('dbi:Pg:dbname=' . $args{user}, $args{user}, '', {RootClass => 'DBIx::PgCoroAnyEvent'})
+my $tc = DBIx::Connector->new("dbi:Pg:dbname=postgres", $PgSet::testuser, '', {RootClass => 'DBIx::PgCoroAnyEvent'})
 	or die DBI::errstr;
 async {
 	$tc->run(
@@ -32,6 +32,9 @@ async {
 ->join;
 ok(
 	my $pool = DBIx::Connector::Pool->new(
+		dsn        => "dbi:Pg:dbname=postgres",
+		user       => $PgSet::testuser,
+		password   => '',
 		initial    => 1,
 		keep_alive => 1,
 		max_size   => 5,

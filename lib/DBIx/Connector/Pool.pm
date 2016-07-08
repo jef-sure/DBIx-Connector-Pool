@@ -65,6 +65,8 @@ use strict;
 use Carp;
 use Time::HiRes 'time';
 
+our $VERSION = "0.01";
+
 sub new {
 	my ($class, %args) = @_;
 	$args{initial}   //= 1;
@@ -84,11 +86,11 @@ sub new {
 	if ($args{connector_base}) {
 		DBIx::Connector::Pool::Item::_rebase($args{connector_base});
 	}
-	$self->make_initial;
+	$self->_make_initial;
 	$self;
 }
 
-sub make_initial {
+sub _make_initial {
 	my $self = $_[0];
 	for my $i (0 .. $self->{initial} - 1) {
 		$self->{pool}[$i] = {
@@ -292,12 +294,65 @@ In case you use some subclass of L<DBIx::Connector> you have to point it out.
 
 =item B<get_connector>
 
-Returns available connector. The same thread will get the same already used 
-connector until it's free. Function always wait for an available connector, 
-it can't return undef. When new connection can not be established an error is 
-thrown or if B<max_size> is greater than B<intial> or equal to C<-1> then
+Returns available connector. Returned object is a subclass of 
+L<DBIx::Connector> or subclass of B<connector_base>. 
+
+The same thread will get the same already used connector until it's free. 
+Function always wait for an available connector, it can't return undef. 
+
+When new connection can not be established an error is thrown 
+or if B<max_size> is greater than B<intial> or equal to C<-1> then
 B<max_size> will be automatically lowered to actually possible size.
 
+=item B<collect_unused>
+
+Method marks unused and disconnects timed out connectors. It keeps minimum 
+B<initial> number of connectors connected. Intended to be used from timers 
+events. 
+
+=item B<connected_size>
+
+Returns number of currently connected connectors.
+
+=item B<$DBIx::Connector::Pool::Item::not_in_use_event>
+
+This package variable is a subroutine referenc which is called when connectors
+object is not in use anymore. You can use it together with B<wait_func> to 
+wake up a waiting for a free connector B<get_connector>.
+
 =back
+
+=head1 SEE ALSO
+ 
+=over
+ 
+=item * L<DBIx::Connector>
+ 
+=item * L<DBI>
+ 
+=item * L<DBIx::PgCoroAnyEvent>
+
+=item * L<DBD::Pg>
+ 
+=item * L<Coro>
+
+=item * L<AnyEvent>
+
+=back
+
+=head1 BUGS
+
+Currently this module tested only for PostgreSQL + Coro + AnyEvent.
+
+=head1 AUTHOR
+ 
+This module was written and is maintained by Anton Petrusevich.
+
+=head1 Copyright and License
+ 
+Copyright (c) 2016 Anton Petrusevich. Some Rights Reserved.
+ 
+This module is free software; you can redistribute it and/or modify it under
+the same terms as Perl itself.
  
 =cut
