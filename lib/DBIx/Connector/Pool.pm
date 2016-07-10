@@ -73,11 +73,12 @@ sub new {
 	$args{tid_func}  //= sub {1};
 	$args{wait_func} //= sub {croak "real waiting function must be supplied"};
 	$args{max_size} ||= -1;
-	$args{keep_alive} //= -1;
-	$args{user}       //= ((getpwuid $>)[0]);
-	$args{password}   //= '';
-	$args{attrs}      //= {};
-	$args{dsn}        //= 'dbi:Pg:dbname=' . $args{user};
+	$args{keep_alive}     //= -1;
+	$args{user}           //= ((getpwuid $>)[0]);
+	$args{password}       //= '';
+	$args{attrs}          //= {};
+	$args{dsn}            //= 'dbi:Pg:dbname=' . $args{user};
+	$args{connector_mode} //= 'fixup';
 	if ($args{max_size} > 0 && $args{initial} != 0 && $args{initial} > $args{max_size}) {
 		$args{initial} = $args{max_size};
 	}
@@ -100,6 +101,7 @@ sub _make_initial {
 					or croak "Can't create initial connect: " . DBI::errstr
 			)
 		};
+		$self->{pool}[$i]{connector}->mode($self->{connector_mode});
 	}
 }
 
@@ -175,6 +177,7 @@ RESELECT:
 			croak "Can't create new connector: " . DBI::errstr;
 		}
 	}
+	$connector->mode($self->{connector_mode});
 	$connector->used_now;
 	push @{$self->{pool}}, {tid => $tid, connector => $connector};
 	$connector;
@@ -273,7 +276,13 @@ Maximum pool capacity. C<-1> means unlimited.
 Data for C<< DBIx::Connector->new >> function. This is the same as for 
 C<< DBI->connect >>. Usually you want to add some unblocking DBI subclass
 as C<RootClass> attribute. Like C<< RootClass => 'DBIx::PgCoroAnyEvent' >>
-for PostgreSQL.  
+for PostgreSQL.
+
+=item B<connector_mode>
+
+Sets the default L<DBIx::Connector/"Connection Modes"> attribute, which is 
+used by run(), txn(), and svp() if no mode is passed to them. Defaults to 
+"fixup".
 
 =item B<tid_func>
 
