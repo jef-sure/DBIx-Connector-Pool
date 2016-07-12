@@ -30,6 +30,14 @@ async {
 	);
 }
 ->join;
+my @pool_wait_queue;
+$DBIx::Connector::Pool::Item::not_in_use_event = sub {
+	if (my $wc = shift @pool_wait_queue) {
+		$wc->ready;
+	}
+	$_[0]->used_now;
+};
+
 ok(
 	my $pool = DBIx::Connector::Pool->new(
 		dsn        => "dbi:Pg:dbname=postgres",
@@ -39,8 +47,8 @@ ok(
 		keep_alive => 1,
 		max_size   => 5,
 		tid_func   => sub {"$Coro::current" =~ /(0x[0-9a-f]+)/i; hex $1},
-		wait_func => sub        {Coro::AnyEvent::sleep 0.05},
-		attrs     => {RootClass => 'DBIx::PgCoroAnyEvent'}
+		wait_func  => sub {push @pool_wait_queue, $Coro::current; Coro::schedule;},
+		attrs => {RootClass => 'DBIx::PgCoroAnyEvent'}
 	),
 	'created pool'
 );
@@ -141,5 +149,6 @@ for my $th (1 .. 10) {
 }
 
 $cv->recv;
-print "total async run time: " . (time - $start_async_time) . " sec\n";
+my $test_duration = (time - $start_async_time);
+ok($test_duration > 14 && $test_duration < 16, "test duration");
 done_testing();

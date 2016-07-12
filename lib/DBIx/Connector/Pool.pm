@@ -327,7 +327,17 @@ Returns number of currently connected connectors.
 
 This package variable is a subroutine referenc which is called when connectors
 object is not in use anymore. You can use it together with B<wait_func> to 
-wake up a waiting for a free connector B<get_connector>.
+wake up a waiting for a free connector B<get_connector>. For example:
+
+  my @pool_wait_queue;
+  $DBIx::Connector::Pool::Item::not_in_use_event = sub {
+     if (my $wc = shift @pool_wait_queue) {
+        $wc->ready;
+     }
+     $_[0]->used_now;
+  };
+...
+  wait_func => sub {push @pool_wait_queue, $Coro::current; Coro::schedule;}   
 
 =back
 
